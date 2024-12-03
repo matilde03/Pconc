@@ -66,12 +66,20 @@ void *process_images(void *arg) {
         out_sepia_img = sepia_image(out_textured_img);
         gdImageDestroy(out_textured_img);
 
+        if (!out_sepia_img) {
+            fprintf(stderr, "Erro: Imagem final está nula para %s\n", file_name);
+            continue;
+        }
+
         // Salvar imagem processada
         char out_file[256];
-        sprintf(out_file, "%s%s", OUTPUT_DIR, file_name);
+        sprintf(out_file, "%s%s", OUTPUT_DIR, strrchr(file_name, '/') + 1); // Usar apenas o nome do arquivo
+        printf("Salvando imagem em: %s\n", out_file);
+
         if (!write_jpeg_file(out_sepia_img, out_file)) {
             fprintf(stderr, "Erro ao salvar imagem %s\n", out_file);
         }
+
         gdImageDestroy(out_sepia_img);
     }
 
@@ -85,6 +93,23 @@ void *process_images(void *arg) {
     printf("Thread [%ld] finalizou em %.3f segundos.\n", pthread_self(), elapsed_time);
 
     pthread_exit(NULL);
+}
+
+// Função para comparar por tamanho
+int compare_by_size(const void *a, const void *b) {
+    const char *file1 = *(const char **)a;
+    const char *file2 = *(const char **)b;
+
+    struct stat stat1, stat2;
+
+    // Obter informações sobre os arquivos
+    if (stat(file1, &stat1) != 0 || stat(file2, &stat2) != 0) {
+        perror("Erro ao obter tamanho do arquivo");
+        return 0;
+    }
+
+    // Comparar tamanhos
+    return (stat1.st_size - stat2.st_size);
 }
 
 // Função principal
@@ -117,8 +142,11 @@ int main(int argc, char *argv[]) {
 
     while ((entry = readdir(dir))) {
         if (strstr(entry->d_name, ".jpeg")) {
-            file_list[file_count] = malloc(strlen(entry->d_name) + 1);
-            strcpy(file_list[file_count], entry->d_name);
+            // Construir caminho completo para o arquivo
+            char *file_path = malloc(strlen(input_dir) + strlen(entry->d_name) + 2);
+            sprintf(file_path, "%s/%s", input_dir, entry->d_name);
+
+            file_list[file_count] = file_path; // Armazenar caminho completo
             file_count++;
         }
     }
@@ -127,22 +155,16 @@ int main(int argc, char *argv[]) {
     // Ordenar arquivos se necessário
     if (strcmp(sort_option, "-name") == 0) {
         qsort(file_list, file_count, sizeof(char *), (int (*)(const void *, const void *))strcmp);
+    } else if (strcmp(sort_option, "-size") == 0) {
+        qsort(file_list, file_count, sizeof(char *), compare_by_size);
+    } else {
+        fprintf(stderr, "Opção de ordenação inválida. Use -name ou -size.\n");
+        exit(EXIT_FAILURE);
     }
-
-    // Adicionar ordenação por tamanho se necessário 
-
-    // MUDAR|!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    if (strcmp(sort_option, "-size") == 0) {
-        qsort(file_list, file_count, sizeof(char *), (int (*)(const void *, const void *))strcmp);
-    }
-
-
-    // Ordenar por tamanho? para igualar mais ou menos o tamanho das imagens e ter tamanhos iguais nas diferentes threads
-
 
     // Dividir trabalho entre threads
-    if(n_threads > file_count){
-        printf("Número de threads ajustado ao número de imagens total.\n");
+    if (n_threads > file_count) {
+        printf("Número de threads ajustado ao número total de imagens.\n");
         n_threads = file_count;
     }
 
@@ -152,11 +174,10 @@ int main(int argc, char *argv[]) {
     int remaining_images = file_count % n_threads;
 
     for (int i = 0; i < n_threads; i++) {
-
         thread_data[i].files = file_list;
         thread_data[i].start = i * images_per_thread;
         thread_data[i].end = (i + 1) * images_per_thread;
-        if (i == n_threads - 1) thread_data[i].end += remaining_images; // Ultima thread pega o resto
+        if (i == n_threads - 1) thread_data[i].end += remaining_images; // Última thread pega o resto
 
         thread_data[i].texture_file = "./paper-texture.png";
 
