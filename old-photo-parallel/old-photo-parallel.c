@@ -195,18 +195,18 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Erro: Ordenação por nome falhou\n");
             exit(EXIT_FAILURE);
         }
-        printf("Ordenação realizada por nome.\n");
     } else if (strcmp(sort_option, "-size") == 0) {
         qsort(file_list, file_count, sizeof(char *), compare_by_size);
         if (!is_sorted_by_size(file_list, file_count)) {
             fprintf(stderr, "Erro: Ordenação por tamanho falhou\n");
             exit(EXIT_FAILURE);
         }
-        printf("Ordenação realizada por tamanho.\n");
     } else {
         fprintf(stderr, "Opção de ordenação inválida. Use -name ou -size.\n");
         exit(EXIT_FAILURE);
     }
+
+    printf("Ordenação validada com sucesso.\n");
 
     if (n_threads > file_count) {
         n_threads = file_count;
@@ -232,17 +232,34 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
+    FILE *log_file;
+    char log_file_name[256];
+    sprintf(log_file_name, "timing_%d-%s.txt", n_threads, sort_option + 1);
+    log_file = fopen(log_file_name, "w");
+    if (!log_file) {
+        fprintf(stderr, "Erro ao criar arquivo de log\n");
+        exit(EXIT_FAILURE);
+    }
+
+    double total_thread_time = 0.0;
+    for (int i = 0; i < n_threads; i++) {
+        fprintf(log_file, "Thread %d: %.3f segundos\n", i + 1, thread_data[i].elapsed_time);
+        total_thread_time += thread_data[i].elapsed_time;
+    }
+
     clock_gettime(CLOCK_MONOTONIC, &end_time_total);
     double total_time = (end_time_total.tv_sec - start_time_total.tv_sec) +
                         (end_time_total.tv_nsec - start_time_total.tv_nsec) / 1e9;
 
-    printf("Tempo total de execução: %.3f segundos.\n", total_time);
-    printf("Processamento completo!\n");
+    fprintf(log_file, "Tempo total do programa: %.3f segundos\n", total_time);
+    fclose(log_file);
 
     for (int i = 0; i < file_count; i++) {
         free(file_list[i]);
     }
     free(file_list);
 
+    printf("Tempo total de execução: %.3f segundos.\n", total_time);
+    printf("Processamento completo!\n");
     return 0;
 }

@@ -1,0 +1,5 @@
+Thread 1: 2.386 segundos
+Thread 2: 2.540 segundos
+Thread 3: 0.024 segundos
+Tempo total do programa: 2.540 segundos
+ 
