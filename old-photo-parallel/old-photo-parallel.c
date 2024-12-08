@@ -261,17 +261,21 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &end_time_seq);
+   
 
-    // ==========================
-    // PARALELL PROCESSING
-    // ==========================
+   
     if (n_threads > file_count) n_threads = file_count;
 
     pthread_t threads[n_threads];
     ThreadData thread_data[n_threads];
     int images_per_thread = file_count / n_threads;
-    int remaining_images = file_count % n_threads;
+    int remaining_images = file_count % n_threads;~
+
+    clock_gettime(CLOCK_MONOTONIC, &end_time_seq);
+
+    // ==========================
+    // PARALELL PROCESSING
+    // ==========================
 
     // Create threads
     for (int i = 0; i < n_threads; i++) {
