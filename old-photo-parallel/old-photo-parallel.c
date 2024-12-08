@@ -201,8 +201,9 @@ void free_resources(char **file_list, int file_count, DIR *dir) {
  * and processes images using parallelism or sequentially.
  */
 int main(int argc, char *argv[]) {
-    struct timespec start_time_total, end_time_total;
+    struct timespec start_time_total, start_time_seq, end_time_total, end_time_seq;
     clock_gettime(CLOCK_MONOTONIC, &start_time_total);
+    clock_gettime(CLOCK_MONOTONIC, &start_time_seq);
 
     // Validate input arguments
     if (argc < 4) {
@@ -267,69 +268,10 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // ==========================
-    // CALCULAR TEMPO SEQUENCIAL
-    // ==========================
-    clock_gettime(CLOCK_MONOTONIC, &start_time_total); // Start sequential timer
-
-    // Process images sequentially
-    for (int i = 0; i < file_count; i++) {
-        char *file_name = file_list[i];
-
-        if (is_image_processed(file_name)) {
-            continue;
-        }
-
-        gdImagePtr in_img = read_jpeg_file(file_name);
-        if (!in_img) {
-            fprintf(stderr, "Error loading image %s\n", file_name);
-            continue;
-        }
-
-        gdImagePtr in_texture_img = read_png_file("./paper-texture.png");
-        if (!in_texture_img) {
-            fprintf(stderr, "Error loading texture ./paper-texture.png\n");
-            gdImageDestroy(in_img);
-            continue;
-        }
-
-        // Apply transformations: contrast -> smooth -> texture -> sepia
-        gdImagePtr out_contrast_img = contrast_image(in_img);
-        gdImageDestroy(in_img);
-
-        if (!out_contrast_img) continue;
-        gdImagePtr out_smoothed_img = smooth_image(out_contrast_img);
-        gdImageDestroy(out_contrast_img);
-
-        if (!out_smoothed_img) continue;
-        gdImagePtr out_textured_img = texture_image(out_smoothed_img, in_texture_img);
-        gdImageDestroy(out_smoothed_img);
-
-        if (!out_textured_img) continue;
-        gdImagePtr out_sepia_img = sepia_image(out_textured_img);
-        gdImageDestroy(out_textured_img);
-
-        if (!out_sepia_img) {
-            fprintf(stderr, "Final image null for %s\n", file_name);
-            continue;
-        }
-
-        // Save processed image
-        char out_file[256];
-        sprintf(out_file, "%s%s", OUTPUT_DIR, strrchr(file_name, '/') + 1);
-        if (!write_jpeg_file(out_sepia_img, out_file)) {
-            fprintf(stderr, "Error saving image %s\n", out_file);
-        }
-        gdImageDestroy(out_sepia_img);
-        gdImageDestroy(in_texture_img);
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &end_time_total); // End sequential timer
-    double sequential_time = (end_time_total.tv_sec - start_time_total.tv_sec) +
-                             (end_time_total.tv_nsec - start_time_total.tv_nsec) / 1e9;
+    clock_gettime(CLOCK_MONOTONIC, &end_time_seq);
 
     // ==========================
-    // PROCESSAMENTO PARALÊLO
+    // PROCESSAMENTO PARALELO
     // ==========================
     if (n_threads > file_count) n_threads = file_count;
 
@@ -380,6 +322,9 @@ int main(int argc, char *argv[]) {
 
     // Log the total time (sequential and parallel)
     clock_gettime(CLOCK_MONOTONIC, &end_time_total);
+    double sequential_time = (end_time_seq.tv_sec - start_time_seq.tv_sec) +
+                        (end_time_seq.tv_nsec - start_time_seq.tv_nsec) / 1e9;
+
     double total_time = (end_time_total.tv_sec - start_time_total.tv_sec) +
                         (end_time_total.tv_nsec - start_time_total.tv_nsec) / 1e9;
 
@@ -391,4 +336,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
