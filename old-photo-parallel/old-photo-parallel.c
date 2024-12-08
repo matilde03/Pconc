@@ -192,16 +192,9 @@ void free_resources(char **file_list, int file_count, DIR *dir) {
  * main: Entry point for the program. Reads input, spawns threads,
  * and processes images using parallelism.
  */
-// ============================
-//           MAIN
-// ============================
-
-/**
- * main: Entry point for the program. Reads input, spawns threads,
- * and processes images using parallelism or sequentially.
- */
 int main(int argc, char *argv[]) {
     struct timespec start_time_total, start_time_seq, end_time_total, end_time_seq;
+
     clock_gettime(CLOCK_MONOTONIC, &start_time_total);
     clock_gettime(CLOCK_MONOTONIC, &start_time_seq);
 
@@ -271,7 +264,7 @@ int main(int argc, char *argv[]) {
     clock_gettime(CLOCK_MONOTONIC, &end_time_seq);
 
     // ==========================
-    // PROCESSAMENTO PARALELO
+    // PARALELL PROCESSING
     // ==========================
     if (n_threads > file_count) n_threads = file_count;
 
