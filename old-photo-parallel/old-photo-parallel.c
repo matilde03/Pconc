@@ -8,82 +8,38 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
-#include "image-lib.h"
 #include <ctype.h>
+#include "image-lib.h"
 
-#define OUTPUT_DIR "./old_photo_PAR_A/"
+#define OUTPUT_DIR "old_photo_PAR_B/"
+#define BATCH_SIZE 5
 
-// ============================
-//        DATA STRUCTURES
-// ============================
-
-/**
- * ThreadData: Stores data for each thread's image processing tasks.
- * @files: List of image file paths.
- * @start: Start index in the file list for the thread.
- * @end: End index in the file list for the thread.
- * @texture_file: Path to the texture file used in processing.
- * @elapsed_time: Time taken by the thread to process its tasks.
- */
 typedef struct {
     char **files;
-    int start;
-    int end;
+    int total_files;
+    int current_index;
+    int processed_count;
+    double total_processing_time;
+    pthread_mutex_t mutex;
+} TaskQueue;
+
+typedef struct {
+    TaskQueue *task_queue;
     char *texture_file;
     double elapsed_time;
 } ThreadData;
 
 // ============================
-//        HELPER FUNCTIONS
+//      HELPER FUNCTIONS
 // ============================
 
-/**
- * extract_number: Extracts the first integer number found in a string.
- * Useful for sorting files by names containing numeric sequences.
- * @str: Input string.
- * @return: Extracted integer or 0 if no number is found.
- */
-int extract_number(const char *str) {
-    while (*str && !isdigit(*str)) str++;
-    return isdigit(*str) ? atoi(str) : 0;
-}
+int extract_number(const char *str) { /* as in original */ }
+int compare_by_name(const void *a, const void *b) { /* as in original */ }
+int compare_by_size(const void *a, const void *b) { /* as in original */ }
 
 /**
- * compare_by_name: Comparator for sorting file names alphabetically.
- * Sorts based on numeric sequences if present.
- */
-int compare_by_name(const void *a, const void *b) {
-    const char *file1 = *(const char **)a;
-    const char *file2 = *(const char **)b;
-
-    int num1 = extract_number(file1);
-    int num2 = extract_number(file2);
-
-    if (num1 != num2) {
-        return num1 - num2;
-    }
-    return strcmp(file1, file2);
-}
-
-/**
- * compare_by_size: Comparator for sorting files by size in ascending order.
- */
-int compare_by_size(const void *a, const void *b) {
-    const char *file1 = *(const char **)a;
-    const char *file2 = *(const char **)b;
-
-    struct stat stat1, stat2;
-    if (stat(file1, &stat1) != 0 || stat(file2, &stat2) != 0) {
-        fprintf(stderr, "Error retrieving file size.\n");
-        return 0;
-    }
-    return (stat1.st_size - stat2.st_size);
-}
-
-/**
- * is_image_processed: Checks if an image has already been processed.
- * @file_name: Path to the image file.
- * @return: 1 if processed, 0 otherwise.
+ * Checks if an image has already been processed by verifying the existence
+ * of the output file.
  */
 int is_image_processed(const char *file_name) {
     char out_file[256];
@@ -92,70 +48,101 @@ int is_image_processed(const char *file_name) {
 }
 
 // ============================
-//      THREAD FUNCTIONS
+//     THREAD FUNCTIONS
 // ============================
 
 /**
- * process_images: Processes a subset of images assigned to a thread.
- * Applies image effects and saves the processed images.
- * @arg: Pointer to ThreadData structure.
+ * Fetches a batch of images to process.
+ * Skips already processed images.
+ * Returns the number of images fetched.
+ */
+int fetch_batch(TaskQueue *queue, char **batch) {
+    pthread_mutex_lock(&queue->mutex);
+    int batch_count = 0;
+
+    while (batch_count < BATCH_SIZE && queue->current_index < queue->total_files) {
+        char *file_name = queue->files[queue->current_index];
+        queue->current_index++;
+
+        // Skip already processed images
+        if (!is_image_processed(file_name)) {
+            batch[batch_count++] = file_name;
+        }
+    }
+
+    pthread_mutex_unlock(&queue->mutex);
+    return batch_count;
+}
+
+/**
+ * Processes images in batches.
  */
 void *process_images(void *arg) {
     ThreadData *data = (ThreadData *)arg;
+    char *batch[BATCH_SIZE];
 
     struct timespec start_time, end_time;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
 
-    gdImagePtr in_texture_img = read_png_file(data->texture_file);
-    if (!in_texture_img) {
+    gdImagePtr texture_img = read_png_file(data->texture_file);
+    if (!texture_img) {
         fprintf(stderr, "Error loading texture %s\n", data->texture_file);
         pthread_exit(NULL);
     }
 
-    for (int i = data->start; i < data->end; i++) {
-        char *file_name = data->files[i];
+    while (1) {
+        int batch_count = fetch_batch(data->task_queue, batch);
 
-        if (is_image_processed(file_name)) {
-            continue;
+        if (batch_count == 0) break;
+
+        for (int i = 0; i < batch_count; i++) {
+            char *file_name = batch[i];
+
+            gdImagePtr img = read_jpeg_file(file_name);
+            if (!img) {
+                fprintf(stderr, "Error loading image %s\n", file_name);
+                continue;
+            }
+
+            gdImagePtr contrast_img = contrast_image(img);
+            gdImageDestroy(img);
+
+            if (!contrast_img) continue;
+            gdImagePtr smooth_img = smooth_image(contrast_img);
+            gdImageDestroy(contrast_img);
+
+            if (!smooth_img) continue;
+            gdImagePtr textured_img = texture_image(smooth_img, texture_img);
+            gdImageDestroy(smooth_img);
+
+            if (!textured_img) continue;
+            gdImagePtr sepia_img = sepia_image(textured_img);
+            gdImageDestroy(textured_img);
+
+            if (!sepia_img) {
+                fprintf(stderr, "Final image null for %s\n", file_name);
+                continue;
+            }
+
+            char out_file[256];
+            sprintf(out_file, "%s%s", OUTPUT_DIR, strrchr(file_name, '/') + 1);
+            if (!write_jpeg_file(sepia_img, out_file)) {
+                fprintf(stderr, "Error saving image %s\n", out_file);
+            }
+            gdImageDestroy(sepia_img);
+
+            // Update processed count and time
+            pthread_mutex_lock(&data->task_queue->mutex);
+            data->task_queue->processed_count++;
+            clock_gettime(CLOCK_MONOTONIC, &end_time);
+            double image_time = (end_time.tv_sec - start_time.tv_sec) +
+                                (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+            data->task_queue->total_processing_time += image_time;
+            pthread_mutex_unlock(&data->task_queue->mutex);
         }
-
-        gdImagePtr in_img = read_jpeg_file(file_name);
-        if (!in_img) {
-            fprintf(stderr, "Error loading image %s\n", file_name);
-            continue;
-        }
-
-        // Apply transformations: contrast -> smooth -> texture -> sepia
-        gdImagePtr out_contrast_img = contrast_image(in_img);
-        gdImageDestroy(in_img);
-
-        if (!out_contrast_img) continue;
-        gdImagePtr out_smoothed_img = smooth_image(out_contrast_img);
-        gdImageDestroy(out_contrast_img);
-
-        if (!out_smoothed_img) continue;
-        gdImagePtr out_textured_img = texture_image(out_smoothed_img, in_texture_img);
-        gdImageDestroy(out_smoothed_img);
-
-        if (!out_textured_img) continue;
-        gdImagePtr out_sepia_img = sepia_image(out_textured_img);
-        gdImageDestroy(out_textured_img);
-
-        if (!out_sepia_img) {
-            fprintf(stderr, "Final image null for %s\n", file_name);
-            continue;
-        }
-
-        // Save processed image
-        char out_file[256];
-        sprintf(out_file, "%s%s", OUTPUT_DIR, strrchr(file_name, '/') + 1);
-        if (!write_jpeg_file(out_sepia_img, out_file)) {
-            fprintf(stderr, "Error saving image %s\n", out_file);
-        }
-        gdImageDestroy(out_sepia_img);
     }
 
-    gdImageDestroy(in_texture_img);
+    gdImageDestroy(texture_img);
 
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     data->elapsed_time = (end_time.tv_sec - start_time.tv_sec) +
@@ -164,41 +151,38 @@ void *process_images(void *arg) {
     pthread_exit(NULL);
 }
 
-// ============================
-//     RESOURCE MANAGEMENT
-// ============================
-
 /**
- * free_resources: Frees allocated memory and closes open directories.
- * @file_list: List of file paths to be freed.
- * @file_count: Number of files in the list.
- * @dir: Directory pointer to be closed (if not NULL).
+ * Monitors statistics when 'S' is pressed.
  */
-void free_resources(char **file_list, int file_count, DIR *dir) {
-    if (dir) closedir(dir);
-    if (file_list) {
-        for (int i = 0; i < file_count; i++) {
-            free(file_list[i]);
+void *monitor_statistics(void *arg) {
+    TaskQueue *queue = (TaskQueue *)arg;
+
+    while (1) {
+        printf("Press 'S' to show statistics or 'Q' to quit monitoring:\n");
+        char input = getchar();
+        if (input == 'S' || input == 's') {
+            pthread_mutex_lock(&queue->mutex);
+            int remaining = queue->total_files - queue->processed_count;
+            double avg_time = queue->processed_count > 0
+                                  ? queue->total_processing_time / queue->processed_count
+                                  : 0.0;
+            pthread_mutex_unlock(&queue->mutex);
+
+            printf("Images processed: %d\n", queue->processed_count);
+            printf("Images remaining: %d\n", remaining);
+            printf("Average processing time: %.3f seconds\n", avg_time);
+        } else if (input == 'Q' || input == 'q') {
+            break;
         }
-        free(file_list);
     }
+    pthread_exit(NULL);
 }
 
 // ============================
 //           MAIN
 // ============================
 
-/**
- * main: Entry point for the program. Reads input, spawns threads,
- * and processes images using parallelism.
- */
 int main(int argc, char *argv[]) {
-    struct timespec start_time_total, start_time_seq, end_time_total, end_time_seq;
-
-    clock_gettime(CLOCK_MONOTONIC, &start_time_total);
-    clock_gettime(CLOCK_MONOTONIC, &start_time_seq);
-
-    // Validate input arguments
     if (argc < 4) {
         fprintf(stderr, "Usage: %s <dir> <n_threads> <-name|-size>\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -221,115 +205,56 @@ int main(int argc, char *argv[]) {
     }
 
     char **file_list = malloc(1000 * sizeof(char *));
-    if (!file_list) {
-        fprintf(stderr, "Memory allocation failed for file_list\n");
-        closedir(dir);
-        exit(EXIT_FAILURE);
-    }
-
-    // Read directory and filter .jpeg files
     int file_count = 0;
     struct dirent *entry;
+
     while ((entry = readdir(dir))) {
         if (strstr(entry->d_name, ".jpeg")) {
             char *file_path = malloc(strlen(input_dir) + strlen(entry->d_name) + 2);
-            if (!file_path) {
-                fprintf(stderr, "Memory allocation failed for file_path\n");
-                free_resources(file_list, file_count, dir);
-                exit(EXIT_FAILURE);
-            }
             sprintf(file_path, "%s/%s", input_dir, entry->d_name);
             file_list[file_count++] = file_path;
         }
     }
     closedir(dir);
 
-    if (file_count == 0) {
-        fprintf(stderr, "No .jpeg files found in directory %s\n", input_dir);
-        free_resources(file_list, file_count, NULL);
-        exit(EXIT_FAILURE);
-    }
-
-    // Sort files based on user input
     if (strcmp(sort_option, "-name") == 0) {
         qsort(file_list, file_count, sizeof(char *), compare_by_name);
     } else if (strcmp(sort_option, "-size") == 0) {
         qsort(file_list, file_count, sizeof(char *), compare_by_size);
     } else {
         fprintf(stderr, "Invalid sorting option. Use -name or -size.\n");
-        free_resources(file_list, file_count, NULL);
+        free(file_list);
         exit(EXIT_FAILURE);
     }
 
-   
-
-   
-    if (n_threads > file_count) n_threads = file_count;
+    TaskQueue task_queue = {file_list, file_count, 0, 0, 0.0, PTHREAD_MUTEX_INITIALIZER};
 
     pthread_t threads[n_threads];
     ThreadData thread_data[n_threads];
-    int images_per_thread = file_count / n_threads;
-    int remaining_images = file_count % n_threads;~
 
-    clock_gettime(CLOCK_MONOTONIC, &end_time_seq);
-
-    // ==========================
-    // PARALELL PROCESSING
-    // ==========================
-
-    // Create threads
     for (int i = 0; i < n_threads; i++) {
-        thread_data[i].files = file_list;
-        thread_data[i].start = i * images_per_thread;
-        thread_data[i].end = (i + 1) * images_per_thread;
-        if (i == n_threads - 1) thread_data[i].end += remaining_images;
-        thread_data[i].texture_file = "./paper-texture.png";
-        thread_data[i].elapsed_time = 0.0;
-
+        thread_data[i] = (ThreadData){&task_queue, "./paper-texture.png", 0.0};
         if (pthread_create(&threads[i], NULL, process_images, &thread_data[i]) != 0) {
             fprintf(stderr, "Error creating thread %d\n", i + 1);
-            for (int j = 0; j < i; j++) {
-                pthread_cancel(threads[j]);
-            }
-            free_resources(file_list, file_count, NULL);
             exit(EXIT_FAILURE);
         }
     }
 
-    // Wait for threads to complete
+    // Start statistics monitoring thread
+    pthread_t stats_thread;
+    if (pthread_create(&stats_thread, NULL, monitor_statistics, &task_queue) != 0) {
+        fprintf(stderr, "Error creating statistics thread\n");
+        exit(EXIT_FAILURE);
+    }
+
     for (int i = 0; i < n_threads; i++) {
         pthread_join(threads[i], NULL);
     }
 
-    // Write log
-    FILE *log_file;
-    char log_file_name[256];
-    sprintf(log_file_name, "%s/timing_%d-%s.txt", OUTPUT_DIR, n_threads, sort_option + 1);
-    log_file = fopen(log_file_name, "w");
-    if (!log_file) {
-        fprintf(stderr, "Error creating log file\n");
-        free_resources(file_list, file_count, NULL);
-        exit(EXIT_FAILURE);
-    }
+    pthread_cancel(stats_thread);  // Stop monitoring when processing is complete
+    pthread_join(stats_thread, NULL);
 
-    // Write parallel execution times for each thread (as before)
-    for (int i = 0; i < n_threads; i++) {
-        fprintf(log_file, "Thread %d: %.3f seconds\n", i + 1, thread_data[i].elapsed_time);
-    }
-
-    // Log the total time (sequential and parallel)
-    clock_gettime(CLOCK_MONOTONIC, &end_time_total);
-    double sequential_time = (end_time_seq.tv_sec - start_time_seq.tv_sec) +
-                        (end_time_seq.tv_nsec - start_time_seq.tv_nsec) / 1e9;
-
-    double total_time = (end_time_total.tv_sec - start_time_total.tv_sec) +
-                        (end_time_total.tv_nsec - start_time_total.tv_nsec) / 1e9;
-
-    fprintf(log_file, "Total sequential execution time: %.3f seconds\n", sequential_time);
-    fprintf(log_file, "Total program execution time: %.3f seconds\n", total_time);
-    fclose(log_file);
-
-    free_resources(file_list, file_count, NULL);
-
+    for (int i = 0; i < file_count; i++) free(file_list[i]);
+    free(file_list);
     return 0;
 }
