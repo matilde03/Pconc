@@ -192,28 +192,45 @@ void *process_images(void *arg) {
 
 void *monitor_statistics(void *arg) {
     TaskQueue *queue = (TaskQueue *)arg;
-    while (monitoring) {
+
+    while (1) {
+        // Bloqueia o mutex para acessar a fila de tarefas
+        pthread_mutex_lock(&queue->mutex);
+
+        int remaining = queue->total_files - queue->processed_count - queue->failed_count;
+        double avg_time = queue->processed_count > 0
+                              ? queue->total_processing_time / queue->processed_count
+                              : 0.0;
+
+        pthread_mutex_unlock(&queue->mutex);
+
+        // Sai do loop automaticamente se todas as imagens foram processadas
+        if (remaining <= 0) {
+            printf("All images have been processed. Exiting monitoring.\n");
+            break;
+        }
+
         printf("Press 'S' to show statistics or 'Q' to quit monitoring:\n");
         char input = getchar();
-        if (input == 'S' || input == 's') {
-            pthread_mutex_lock(&queue->mutex);
-            int remaining = queue->total_files - queue->processed_count - queue->failed_count;
-            double avg_time = queue->processed_count > 0
-                                  ? queue->total_processing_time / queue->processed_count
-                                  : 0.0;
-            pthread_mutex_unlock(&queue->mutex);
 
+        if (input == 'S' || input == 's') {
+            // Mostra as estatísticas
+            pthread_mutex_lock(&queue->mutex);
             printf("Images processed: %d\n", queue->processed_count);
             printf("Images failed: %d\n", queue->failed_count);
             printf("Images remaining: %d\n", remaining);
             printf("Average processing time: %.3f seconds\n", avg_time);
+            pthread_mutex_unlock(&queue->mutex);
         } else if (input == 'Q' || input == 'q') {
-            monitoring = 0;
+            // Sai do loop quando o utilizador digitar 'Q' ou 'q'
+            printf("Exiting monitoring by user request.\n");
             break;
         }
     }
+
     pthread_exit(NULL);
 }
+
 
 void save_timing_report(const char *sort_option, int n_threads, double total_time, ThreadData *data, int thread_count) {
     char report_name[MAX_PATH_LENGTH];
