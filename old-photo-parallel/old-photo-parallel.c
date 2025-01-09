@@ -13,6 +13,20 @@
 
 #define MAX_PATH_LENGTH 512
 
+// ============================
+//        DATA STRUCTURES
+// ============================
+
+/**
+ * TaskQueue: --
+ * @files: --
+ * @total_files: --
+ * @current_index: --
+ * @processed_count: --
+ * @failed_count: --
+ * @total_processing_time: --
+ * @mutex: --
+ */
 typedef struct {
     char **files;
     int total_files;
@@ -23,6 +37,13 @@ typedef struct {
     pthread_mutex_t mutex;
 } TaskQueue;
 
+/**
+ * ThreadData: --
+ * @TaskQueue: --
+ * @texture_file: --
+ * @output_dir: --
+ * @elapsed_time: --
+ */
 typedef struct {
     TaskQueue *task_queue;
     char *texture_file;
@@ -36,9 +57,48 @@ volatile int monitoring = 1;  // Flag to control the monitoring thread
 //      HELPER FUNCTIONS
 // ============================
 
-int extract_number(const char *str) { /* as in original */ }
-int compare_by_name(const void *a, const void *b) { /* as in original */ }
-int compare_by_size(const void *a, const void *b) { /* as in original */ }
+/**
+ * extract_number: Extracts the first integer number found in a string.
+ * Useful for sorting files by names containing numeric sequences.
+ * @str: Input string.
+ * @return: Extracted integer or 0 if no number is found.
+ */
+int extract_number(const char *str) {
+    while (*str && !isdigit(*str)) str++;
+    return isdigit(*str) ? atoi(str) : 0;
+}
+
+/**
+ * compare_by_name: Comparator for sorting file names alphabetically.
+ * Sorts based on numeric sequences if present.
+ */
+int compare_by_name(const void *a, const void *b) {
+    const char *file1 = *(const char **)a;
+    const char *file2 = *(const char **)b;
+
+    int num1 = extract_number(file1);
+    int num2 = extract_number(file2);
+
+    if (num1 != num2) {
+        return num1 - num2;
+    }
+    return strcmp(file1, file2);
+}
+
+/**
+ * compare_by_size: Comparator for sorting files by size in ascending order.
+ */
+int compare_by_size(const void *a, const void *b) {
+    const char *file1 = *(const char **)a;
+    const char *file2 = *(const char **)b;
+
+    struct stat stat1, stat2;
+    if (stat(file1, &stat1) != 0 || stat(file2, &stat2) != 0) {
+        fprintf(stderr, "Error retrieving file size.\n");
+        return 0;
+    }
+    return (stat1.st_size - stat2.st_size);
+}
 
 int is_image_processed(const char *file_name, const char *output_dir) {
     char out_file[MAX_PATH_LENGTH];
