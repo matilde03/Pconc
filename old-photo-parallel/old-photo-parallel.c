@@ -18,37 +18,37 @@
 // ============================
 
 /**
- * TaskQueue: --
- * @files: --
- * @total_files: --
- * @current_index: --
- * @processed_count: --
- * @failed_count: --
- * @total_processing_time: --
- * @mutex: --
+ * TaskQueue: A structure representing a queue of tasks (images) to be processed.
+ * @files: An array of strings containing the file paths of the images to be processed.
+ * @total_files: The total number of image files in the queue.
+ * @current_index: The current index in the array of files, indicating the next image to process.
+ * @processed_count: The total number of images that have been successfully processed.
+ * @failed_count: The total number of images that failed to process.
+ * @total_processing_time: The cumulative time spent processing all images, in seconds.
+ * @mutex: A mutex to synchronize access to the task queue across multiple threads.
  */
 typedef struct {
-    char **files;
-    int total_files;
-    int current_index;
-    int processed_count;
-    int failed_count;
-    double total_processing_time;
-    pthread_mutex_t mutex;
+    char **files;                // Paths to image files
+    int total_files;             // Total number of files
+    int current_index;           // Next file index to process
+    int processed_count;         // Count of successfully processed images
+    int failed_count;            // Count of images that failed to process
+    double total_processing_time; // Cumulative processing time (in seconds)
+    pthread_mutex_t mutex;       // Mutex for thread synchronization
 } TaskQueue;
 
 /**
- * ThreadData: --
- * @TaskQueue: --
- * @texture_file: --
- * @output_dir: --
- * @elapsed_time: --
+ * ThreadData: A structure representing the data passed to each thread.
+ * @task_queue: A pointer to the TaskQueue structure shared by all threads.
+ * @texture_file: A string containing the path to the texture file used for processing images.
+ * @output_dir: A string containing the path to the directory where processed images will be saved.
+ * @elapsed_time: The total time taken by this specific thread to process its assigned images, in seconds.
  */
 typedef struct {
-    TaskQueue *task_queue;
-    char *texture_file;
-    char *output_dir;
-    double elapsed_time;
+    TaskQueue *task_queue;       // Pointer to shared TaskQueue
+    char *texture_file;          // Path to texture file
+    char *output_dir;            // Directory to save processed images
+    double elapsed_time;         // Total processing time for this thread
 } ThreadData;
 
 volatile int monitoring = 1;  // Flag to control the monitoring thread
@@ -100,12 +100,18 @@ int compare_by_size(const void *a, const void *b) {
     return (stat1.st_size - stat2.st_size);
 }
 
+/**
+ * is_image_processed: Verification to check if the processed image has been produced before.
+ */       
 int is_image_processed(const char *file_name, const char *output_dir) {
     char out_file[MAX_PATH_LENGTH];
     sprintf(out_file, "%s/%s", output_dir, strrchr(file_name, '/') + 1);
     return access(out_file, F_OK) == 0;
 }
 
+/**
+ * fetch_next_image: Retrieves the next unprocessed image file from the task queue.
+ */       
 char *fetch_next_image(TaskQueue *queue, const char *output_dir) {
     pthread_mutex_lock(&queue->mutex);
     char *next_image = NULL;
@@ -122,6 +128,9 @@ char *fetch_next_image(TaskQueue *queue, const char *output_dir) {
     return next_image;
 }
 
+/**
+ * process_images: Step by step processing of unprocessed image files.
+ */  
 void *process_images(void *arg) {
     ThreadData *data = (ThreadData *)arg;
     struct timespec start_time, end_time;
@@ -190,64 +199,98 @@ void *process_images(void *arg) {
     pthread_exit(NULL);
 }
 
+/**
+ * monitor_statistics: Waits for user input to show statistics data, stops waiting when all files are processed.
+ */  
 void *monitor_statistics(void *arg) {
     TaskQueue *queue = (TaskQueue *)arg;
 
+    printf("Press 'S' to show statistics or 'Q' to quit monitoring:\n");
+
     while (1) {
-        // Bloqueia o mutex para acessar a fila de tarefas
         pthread_mutex_lock(&queue->mutex);
 
-        int remaining = queue->total_files - queue->processed_count - queue->failed_count;
+        int remaining = 0;
+        for (int i = queue->current_index; i < queue->total_files; i++) {
+            if (!is_image_processed(queue->files[i], "./old_photo_PAR_B")) {
+                remaining++;
+            }
+        }
+
         double avg_time = queue->processed_count > 0
                               ? queue->total_processing_time / queue->processed_count
                               : 0.0;
 
         pthread_mutex_unlock(&queue->mutex);
 
-        // Sai do loop automaticamente se todas as imagens foram processadas
         if (remaining <= 0) {
-            printf("All images have been processed. Exiting monitoring.\n");
+            printf("\nAll images have been processed. Exiting monitoring.\n");
             break;
         }
 
-        printf("Press 'S' to show statistics or 'Q' to quit monitoring:\n");
-        char input = getchar();
+        // Verifica a entrada do usuário com timeout
+        struct timeval timeout = {1, 0}; // Timeout de 1 segundo
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(STDIN_FILENO, &set);
 
-        if (input == 'S' || input == 's') {
-            // Mostra as estatísticas
-            pthread_mutex_lock(&queue->mutex);
-            printf("Images processed: %d\n", queue->processed_count);
-            printf("Images failed: %d\n", queue->failed_count);
-            printf("Images remaining: %d\n", remaining);
-            printf("Average processing time: %.3f seconds\n", avg_time);
-            pthread_mutex_unlock(&queue->mutex);
-        } else if (input == 'Q' || input == 'q') {
-            // Sai do loop quando o utilizador digitar 'Q' ou 'q'
-            printf("Exiting monitoring by user request.\n");
-            break;
+        int result = select(STDIN_FILENO + 1, &set, NULL, NULL, &timeout);
+
+        if (result > 0) {
+            char input = getchar();
+            if (input == 'S' || input == 's') {
+                pthread_mutex_lock(&queue->mutex);
+
+                printf("\n--- Statistics ---\n");
+                printf("Images processed: %d\n", queue->processed_count);
+                printf("Images failed: %d\n", queue->failed_count);
+                printf("Images remaining: %d\n", remaining);
+                printf("Average processing time: %.3f seconds\n", avg_time);
+                printf("------------------\n");
+
+                printf("\nPress 'S' to show statistics or 'Q' to quit monitoring:\n");
+
+                pthread_mutex_unlock(&queue->mutex);
+            } else if (input == 'Q' || input == 'q') {
+                printf("\nExiting monitoring by user request.\n");
+                break;
+            }
         }
     }
 
     pthread_exit(NULL);
 }
 
-
-void save_timing_report(const char *sort_option, int n_threads, double total_time, ThreadData *data, int thread_count) {
+/**
+ * save_timing_report: Creates and prints to a file all relevant time values.
+ */  
+void save_timing_report(char *output_dir, const char *sort_option, int n_threads, double total_time, ThreadData *data, int thread_count) {
     char report_name[MAX_PATH_LENGTH];
-    sprintf(report_name, "timing_B_%d%s.txt", n_threads, strcmp(sort_option, "-name") == 0 ? "-name" : "-size");
+    sprintf(report_name, "%s/timing_B_%d%s.txt", output_dir, n_threads, strcmp(sort_option, "-name") == 0 ? "-name" : "-size");
     FILE *report = fopen(report_name, "w");
     if (!report) {
         fprintf(stderr, "Error creating report file %s\n", report_name);
         return;
     }
 
-    fprintf(report, "Total execution time: %.3f seconds\n", total_time);
-    fprintf(report, "Non-parallel execution time: %.3f seconds\n", total_time - data[0].elapsed_time);  // Approximation
+    fprintf(report, "Total execution time: %.3f seconds\n", total_time);  
     for (int i = 0; i < thread_count; i++) {
         fprintf(report, "Thread %d time: %.3f seconds\n", i + 1, data[i].elapsed_time);
     }
+    fprintf(report, "Non-parallel execution time: %.3f seconds\n", total_time - data[0].elapsed_time);
     fclose(report);
 }
+
+/**
+ * free_file_list: Frees the memory allocated for the file list.
+ */
+void free_file_list(char **file_list, int file_count) {
+    for (int i = 0; i < file_count; i++) {
+        free(file_list[i]);
+    }
+    free(file_list);
+}
+
 
 int main(int argc, char *argv[]) {
     if (argc != 4) {
@@ -300,8 +343,7 @@ int main(int argc, char *argv[]) {
                 char **temp = realloc(file_list, file_list_capacity * sizeof(char *));
                 if (!temp) {
                     fprintf(stderr, "Memory reallocation error for file list\n");
-                    for (int i = 0; i < file_count; i++) free(file_list[i]);
-                    free(file_list);
+                    free_file_list(file_list, file_count);
                     closedir(dir);
                     exit(EXIT_FAILURE);
                 }
@@ -310,8 +352,7 @@ int main(int argc, char *argv[]) {
             char *file_path = malloc(strlen(input_dir) + strlen(entry->d_name) + 2);
             if (!file_path) {
                 fprintf(stderr, "Memory allocation error for file path\n");
-                for (int i = 0; i < file_count; i++) free(file_list[i]);
-                free(file_list);
+                free_file_list(file_list, file_count);
                 closedir(dir);
                 exit(EXIT_FAILURE);
             }
@@ -339,8 +380,7 @@ int main(int argc, char *argv[]) {
         if (pthread_create(&threads[i], NULL, process_images, &thread_data[i]) != 0) {
             fprintf(stderr, "Error creating thread %d\n", i + 1);
             for (int j = 0; j < i; j++) pthread_join(threads[j], NULL);
-            for (int j = 0; j < file_count; j++) free(file_list[j]);
-            free(file_list);
+            free_file_list(file_list, file_count);
             pthread_mutex_destroy(&task_queue.mutex);
             exit(EXIT_FAILURE);
         }
@@ -350,8 +390,7 @@ int main(int argc, char *argv[]) {
     if (pthread_create(&stats_thread, NULL, monitor_statistics, &task_queue) != 0) {
         fprintf(stderr, "Error creating statistics thread\n");
         for (int i = 0; i < n_threads; i++) pthread_join(threads[i], NULL);
-        for (int i = 0; i < file_count; i++) free(file_list[i]);
-        free(file_list);
+        free_file_list(file_list, file_count);
         pthread_mutex_destroy(&task_queue.mutex);
         exit(EXIT_FAILURE);
     }
@@ -367,10 +406,9 @@ int main(int argc, char *argv[]) {
     double total_time = (end_time.tv_sec - start_time.tv_sec) +
                         (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
 
-    save_timing_report(sort_option, n_threads, total_time, thread_data, n_threads);
+    save_timing_report(input_dir, sort_option, n_threads, total_time, thread_data, n_threads);
 
     pthread_mutex_destroy(&task_queue.mutex);
-    for (int i = 0; i < file_count; i++) free(file_list[i]);
-    free(file_list);
+    free_file_list(file_list, file_count);
     return 0;
 }
